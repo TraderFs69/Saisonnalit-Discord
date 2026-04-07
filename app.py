@@ -207,3 +207,8 @@ if st.button("RUN ANALYSE"):
     if st.button("ENVOYER DISCORD"):
         send_to_discord(report)
         st.success("Envoyé dans Discord")
+        
+if st.button("TEST DISCORD"):
+    r = requests.post(DISCORD_WEBHOOK_URL, json={"content": "TEST TEA"})
+    st.write("Status:", r.status_code)
+    st.write(r.text)
