@@ -14,6 +14,16 @@ except:
     st.error("Clés manquantes dans secrets.toml")
     st.stop()
 
+# ---------------- SESSION STATE ----------------
+if "top_m" not in st.session_state:
+    st.session_state.top_m = pd.DataFrame()
+
+if "top_2w" not in st.session_state:
+    st.session_state.top_2w = pd.DataFrame()
+
+if "top_3m" not in st.session_state:
+    st.session_state.top_3m = pd.DataFrame()
+
 # ---------------- HELPERS ----------------
 @st.cache_data(ttl=86400)
 def fetch_sp500():
@@ -42,7 +52,6 @@ def get_data(ticker, start, end):
         return None
 
 
-# ---------------- SAISONNALITÉ DOY ----------------
 def seasonality_doy(close, start_doy, end_doy):
 
     df = close.to_frame("c").copy()
@@ -102,7 +111,6 @@ def rank(data):
     ).head(10)
 
 
-# ---------------- DISCORD FIX ----------------
 def send_block(title, df):
 
     if df.empty:
@@ -120,6 +128,7 @@ def send_block(title, df):
 st.title("Saisonnalité TEA PRO (Polygon)")
 st.write("Connexion API OK")
 
+# ---------------- RUN ----------------
 if st.button("RUN ANALYSE"):
 
     tickers = fetch_sp500()[:150]
@@ -135,14 +144,11 @@ if st.button("RUN ANALYSE"):
     results_2w = []
     results_3m = []
 
-    progress = st.progress(0)
-
-    for i, ticker in enumerate(tickers):
+    for ticker in tickers:
 
         close = get_data(ticker, start_all, end_all)
 
         if close is None or len(close) < 50:
-            progress.progress((i+1)/len(tickers))
             continue
 
         # -------- MOIS --------
@@ -168,38 +174,29 @@ if st.button("RUN ANALYSE"):
         if stats_3m:
             results_3m.append((ticker, stats_3m))
 
-        progress.progress((i+1)/len(tickers))
-        time.sleep(0.01)
+    # STOCKAGE 🔥
+    st.session_state.top_m = rank(results_month)
+    st.session_state.top_2w = rank(results_2w)
+    st.session_state.top_3m = rank(results_3m)
 
-    # -------- RANKING --------
-    top_m = rank(results_month)
-    top_2w = rank(results_2w)
-    top_3m = rank(results_3m)
+# ---------------- DISPLAY ----------------
+st.subheader("📅 Mois courant")
+if not st.session_state.top_m.empty:
+    st.dataframe(st.session_state.top_m)
 
-    # -------- DISPLAY --------
-    st.subheader("📅 Mois courant")
-    if not top_m.empty:
-        st.dataframe(top_m)
-    else:
-        st.warning("Aucun résultat")
+st.subheader("📆 2 semaines")
+if not st.session_state.top_2w.empty:
+    st.dataframe(st.session_state.top_2w)
 
-    st.subheader("📆 2 prochaines semaines")
-    if not top_2w.empty:
-        st.dataframe(top_2w)
-    else:
-        st.warning("Aucun résultat")
+st.subheader("📊 3 mois")
+if not st.session_state.top_3m.empty:
+    st.dataframe(st.session_state.top_3m)
 
-    st.subheader("📊 3 prochains mois")
-    if not top_3m.empty:
-        st.dataframe(top_3m)
-    else:
-        st.warning("Aucun résultat")
+# ---------------- DISCORD ----------------
+if st.button("ENVOYER DISCORD"):
 
-    # -------- DISCORD --------
-    if st.button("ENVOYER DISCORD"):
+    send_block("MOIS", st.session_state.top_m)
+    send_block("2 SEMAINES", st.session_state.top_2w)
+    send_block("3 MOIS", st.session_state.top_3m)
 
-        send_block("MOIS", top_m)
-        send_block("2 SEMAINES", top_2w)
-        send_block("3 MOIS", top_3m)
-
-        st.success("Envoyé dans Discord 🚀")
+    st.success("Envoyé dans Discord 🚀")
