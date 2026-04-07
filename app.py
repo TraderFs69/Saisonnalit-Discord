@@ -42,7 +42,7 @@ def get_data(ticker, start, end):
         return None
 
 
-# 🔥 LOGIQUE DOY (corrige tout)
+# ---------------- SAISONNALITÉ DOY ----------------
 def seasonality_doy(close, start_doy, end_doy):
 
     df = close.to_frame("c").copy()
@@ -102,12 +102,18 @@ def rank(data):
     ).head(10)
 
 
-def send_to_discord(msg):
-    try:
-        r = requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
-        st.write("Discord status:", r.status_code)
-    except Exception as e:
-        st.write("Erreur Discord:", e)
+# ---------------- DISCORD FIX ----------------
+def send_block(title, df):
+
+    if df.empty:
+        msg = f"**{title}**\nAucun résultat"
+    else:
+        msg = f"**{title}**\n"
+        for _, r in df.iterrows():
+            msg += f"`{r['ticker']}` | WR {round(r['winrate'])}% | {round(r['mean'],2)}%\n"
+
+    r = requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
+    st.write(title, "status:", r.status_code)
 
 
 # ---------------- UI ----------------
@@ -190,25 +196,10 @@ if st.button("RUN ANALYSE"):
         st.warning("Aucun résultat")
 
     # -------- DISCORD --------
-    report = "SAISONNALITÉ TEA\n\n"
-
-    def block(title, df):
-        if df.empty:
-            return f"{title}: Aucun résultat\n\n"
-        txt = f"{title}:\n"
-        for _, r in df.iterrows():
-            txt += f"{r['ticker']} | WR {round(r['winrate'])}% | {round(r['mean'],2)}%\n"
-        return txt + "\n"
-
-    report += block("MOIS", top_m)
-    report += block("2 SEMAINES", top_2w)
-    report += block("3 MOIS", top_3m)
-
     if st.button("ENVOYER DISCORD"):
-        send_to_discord(report)
-        st.success("Envoyé dans Discord")
-        
-if st.button("TEST DISCORD"):
-    r = requests.post(DISCORD_WEBHOOK_URL, json={"content": "TEST TEA"})
-    st.write("Status:", r.status_code)
-    st.write(r.text)
+
+        send_block("MOIS", top_m)
+        send_block("2 SEMAINES", top_2w)
+        send_block("3 MOIS", top_3m)
+
+        st.success("Envoyé dans Discord 🚀")
