@@ -37,28 +37,35 @@ def get_data(ticker, start, end):
         df["Date"] = pd.to_datetime(df["t"], unit="ms")
         df.set_index("Date", inplace=True)
 
-        return df["c"]
+        return df["c"]  # close
+
     except:
         return None
 
 
-def seasonality(close, years, start_md, end_md):
+# 🔥 NOUVELLE LOGIQUE DOY (IMPORTANT)
+def seasonality_doy(close, start_doy, end_doy):
+
+    df = close.to_frame("c").copy()
+    df["doy"] = df.index.dayofyear
+    df["year"] = df.index.year
+
     returns = []
 
-    for y in years:
-        try:
-            start = pd.Timestamp(f"{y}-{start_md}")
-            end = pd.Timestamp(f"{y}-{end_md}")
+    for y in df["year"].unique():
 
-            df = close[(close.index >= start) & (close.index <= end)]
+        df_year = df[df["year"] == y]
 
-            if len(df) > 2:
-                r = (df.iloc[-1] / df.iloc[0] - 1) * 100
-                returns.append(r)
-        except:
-            continue
+        if start_doy <= end_doy:
+            window = df_year[(df_year["doy"] >= start_doy) & (df_year["doy"] <= end_doy)]
+        else:
+            window = df_year[(df_year["doy"] >= start_doy) | (df_year["doy"] <= end_doy)]
 
-    if len(returns) < 8:  # plus flexible
+        if len(window) > 2:
+            r = (window["c"].iloc[-1] / window["c"].iloc[0] - 1) * 100
+            returns.append(r)
+
+    if len(returns) < 6:
         return None
 
     s = pd.Series(returns)
@@ -87,9 +94,6 @@ def rank(data):
     for t, s in data:
         if s is None:
             continue
-        if "winrate" not in s or "mean" not in s:
-            continue
-
         rows.append({
             "ticker": t,
             "winrate": s["winrate"],
@@ -108,19 +112,17 @@ def rank(data):
 
 
 # ---------------- UI ----------------
-st.title("Saisonnalité TEA (Polygon)")
-st.write("API Polygon connectée")
+st.title("Saisonnalité TEA PRO (Polygon)")
+st.write("Connexion API OK")
 
 if st.button("RUN ANALYSE"):
 
-    tickers = fetch_sp500()[:200]  # limiter pour vitesse
+    tickers = fetch_sp500()  # 🔥 FULL LIST (IMPORTANT)
 
     today = datetime.today()
     current_month = today.month
 
     start_year = today.year - 15
-    years = list(range(start_year, today.year + 1))
-
     start_all = f"{start_year}-01-01"
     end_all = f"{today.year}-12-31"
 
@@ -130,54 +132,55 @@ if st.button("RUN ANALYSE"):
 
     progress = st.progress(0)
 
-    for i, t in enumerate(tickers):
+    for i, ticker in enumerate(tickers):
 
-        close = get_data(t, start_all, end_all)
+        close = get_data(ticker, start_all, end_all)
 
-        if close is None:
+        if close is None or len(close) < 50:
             progress.progress((i+1)/len(tickers))
             continue
 
         # -------- MOIS --------
-        m = f"{current_month:02d}"
-        stats_m = seasonality(close, years, f"{m}-01", f"{m}-28")
+        start_doy = datetime(today.year, current_month, 1).timetuple().tm_yday
+        end_doy = datetime(today.year, current_month, 28).timetuple().tm_yday
+
+        stats_m = seasonality_doy(close, start_doy, end_doy)
 
         if stats_m:
-            results_month.append((t, stats_m))
+            results_month.append((ticker, stats_m))
 
         # -------- 2 SEMAINES --------
-        start_2w = today.strftime("%m-%d")
-        end_2w = (today + timedelta(days=14)).strftime("%m-%d")
+        start_doy = today.timetuple().tm_yday
+        end_doy = (today + timedelta(days=14)).timetuple().tm_yday
 
-        stats_2w = seasonality(close, years, start_2w, end_2w)
+        stats_2w = seasonality_doy(close, start_doy, end_doy)
 
         if stats_2w:
-            results_2w.append((t, stats_2w))
+            results_2w.append((ticker, stats_2w))
 
         # -------- 3 MOIS --------
-        future = today + timedelta(days=90)
-        stats_3m = seasonality(close, years, start_2w, future.strftime("%m-%d"))
+        end_3m = (today + timedelta(days=90)).timetuple().tm_yday
+
+        stats_3m = seasonality_doy(close, start_doy, end_3m)
 
         if stats_3m:
-            results_3m.append((t, stats_3m))
+            results_3m.append((ticker, stats_3m))
 
         progress.progress((i+1)/len(tickers))
         time.sleep(0.01)
 
     # DEBUG
-    st.write("Nb résultats mois:", len(results_month))
-    st.write("Nb résultats 2 semaines:", len(results_2w))
-    st.write("Nb résultats 3 mois:", len(results_3m))
+    st.write("Résultats mois:", len(results_month))
+    st.write("Résultats 2 semaines:", len(results_2w))
+    st.write("Résultats 3 mois:", len(results_3m))
 
-    # RANKING
+    # -------- RANKING --------
     top_m = rank(results_month)
     top_2w = rank(results_2w)
     top_3m = rank(results_3m)
 
-    # ---------------- DISPLAY ----------------
-    if top_m.empty:
-        st.warning("Aucun résultat mois")
-    else:
+    # -------- DISPLAY --------
+    if not top_m.empty:
         st.subheader("Mois courant")
         st.dataframe(top_m)
 
@@ -189,33 +192,20 @@ if st.button("RUN ANALYSE"):
         st.subheader("3 mois")
         st.dataframe(top_3m)
 
-    # ---------------- DISCORD ----------------
+    # -------- DISCORD --------
     report = "SAISONNALITÉ TEA\n\n"
 
-    if not top_m.empty:
-        report += "MOIS:\n"
-        for _, r in top_m.iterrows():
-            report += f"{r['ticker']} | WR {round(r['winrate'])}% | {round(r['mean'],2)}%\n"
-    else:
-        report += "MOIS: Aucun résultat\n"
+    def format_block(name, df):
+        if df.empty:
+            return f"{name}: Aucun résultat\n\n"
+        txt = f"{name}:\n"
+        for _, r in df.iterrows():
+            txt += f"{r['ticker']} | WR {round(r['winrate'])}% | {round(r['mean'],2)}%\n"
+        return txt + "\n"
 
-    report += "\n"
-
-    if not top_2w.empty:
-        report += "2 SEMAINES:\n"
-        for _, r in top_2w.iterrows():
-            report += f"{r['ticker']} | WR {round(r['winrate'])}% | {round(r['mean'],2)}%\n"
-    else:
-        report += "2 SEMAINES: Aucun résultat\n"
-
-    report += "\n"
-
-    if not top_3m.empty:
-        report += "3 MOIS:\n"
-        for _, r in top_3m.iterrows():
-            report += f"{r['ticker']} | WR {round(r['winrate'])}% | {round(r['mean'],2)}%\n"
-    else:
-        report += "3 MOIS: Aucun résultat\n"
+    report += format_block("MOIS", top_m)
+    report += format_block("2 SEMAINES", top_2w)
+    report += format_block("3 MOIS", top_3m)
 
     if st.button("ENVOYER DISCORD"):
         send_to_discord(report)
