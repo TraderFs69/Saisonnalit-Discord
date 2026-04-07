@@ -3,22 +3,15 @@ import pandas as pd
 from datetime import datetime, timedelta
 import requests
 import time
-import warnings
-warnings.filterwarnings("ignore")
 
 # ---------------- CONFIG ----------------
-try:
-    POLYGON_API_KEY = st.secrets["POLYGON_API_KEY"]
-    DISCORD_WEBHOOK_URL = st.secrets["DISCORD_WEBHOOK_URL"]
-except:
-    st.error("Clés manquantes dans secrets.toml")
-    st.stop()
+POLYGON_API_KEY = st.secrets["POLYGON_API_KEY"]
+DISCORD_WEBHOOK_URL = st.secrets["DISCORD_WEBHOOK_URL"]
 
 # ---------------- HELPERS ----------------
 @st.cache_data(ttl=86400)
 def fetch_sp500():
-    url = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
-    df = pd.read_csv(url)
+    df = pd.read_csv("https://datahub.io/core/s-and-p-500-companies/r/constituents.csv")
     return df["Symbol"].str.replace(".", "-", regex=False).tolist()
 
 
@@ -37,13 +30,12 @@ def get_data(ticker, start, end):
         df["Date"] = pd.to_datetime(df["t"], unit="ms")
         df.set_index("Date", inplace=True)
 
-        return df["c"]  # close
+        return df["c"]
 
     except:
         return None
 
 
-# 🔥 NOUVELLE LOGIQUE DOY (IMPORTANT)
 def seasonality_doy(close, start_doy, end_doy):
 
     df = close.to_frame("c").copy()
@@ -65,7 +57,8 @@ def seasonality_doy(close, start_doy, end_doy):
             r = (window["c"].iloc[-1] / window["c"].iloc[0] - 1) * 100
             returns.append(r)
 
-    if len(returns) < 6:
+    # 🔥 IMPORTANT : on assouplit
+    if len(returns) < 3:
         return None
 
     s = pd.Series(returns)
@@ -77,47 +70,36 @@ def seasonality_doy(close, start_doy, end_doy):
     }
 
 
-def send_to_discord(msg):
-    try:
-        r = requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
-        print("Discord:", r.status_code, r.text)
-    except Exception as e:
-        print("Erreur Discord:", e)
-
-
 def rank(data):
-
     if len(data) == 0:
         return pd.DataFrame()
 
-    rows = []
-    for t, s in data:
-        if s is None:
-            continue
-        rows.append({
+    df = pd.DataFrame([
+        {
             "ticker": t,
             "winrate": s["winrate"],
             "mean": s["mean"]
-        })
+        }
+        for t, s in data if s is not None
+    ])
 
-    if len(rows) == 0:
-        return pd.DataFrame()
+    if df.empty:
+        return df
 
-    df = pd.DataFrame(rows)
+    return df.sort_values(by=["winrate", "mean"], ascending=False).head(10)
 
-    return df.sort_values(
-        by=["winrate", "mean"],
-        ascending=False
-    ).head(10)
+
+def send_to_discord(msg):
+    r = requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
+    st.write("Discord status:", r.status_code)
 
 
 # ---------------- UI ----------------
-st.title("Saisonnalité TEA PRO (Polygon)")
-st.write("Connexion API OK")
+st.title("Saisonnalité TEA DEBUG")
 
-if st.button("RUN ANALYSE"):
+if st.button("RUN"):
 
-    tickers = fetch_sp500()  # 🔥 FULL LIST (IMPORTANT)
+    tickers = fetch_sp500()[:100]  # 🔥 debug rapide
 
     today = datetime.today()
     current_month = today.month
@@ -127,86 +109,43 @@ if st.button("RUN ANALYSE"):
     end_all = f"{today.year}-12-31"
 
     results_month = []
-    results_2w = []
-    results_3m = []
 
-    progress = st.progress(0)
+    debug_data_ok = 0
 
     for i, ticker in enumerate(tickers):
 
         close = get_data(ticker, start_all, end_all)
 
-        if close is None or len(close) < 50:
-            progress.progress((i+1)/len(tickers))
+        if close is None:
             continue
 
-        # -------- MOIS --------
+        debug_data_ok += 1
+
+        # MOIS
         start_doy = datetime(today.year, current_month, 1).timetuple().tm_yday
         end_doy = datetime(today.year, current_month, 28).timetuple().tm_yday
 
-        stats_m = seasonality_doy(close, start_doy, end_doy)
+        stats = seasonality_doy(close, start_doy, end_doy)
 
-        if stats_m:
-            results_month.append((ticker, stats_m))
-
-        # -------- 2 SEMAINES --------
-        start_doy = today.timetuple().tm_yday
-        end_doy = (today + timedelta(days=14)).timetuple().tm_yday
-
-        stats_2w = seasonality_doy(close, start_doy, end_doy)
-
-        if stats_2w:
-            results_2w.append((ticker, stats_2w))
-
-        # -------- 3 MOIS --------
-        end_3m = (today + timedelta(days=90)).timetuple().tm_yday
-
-        stats_3m = seasonality_doy(close, start_doy, end_3m)
-
-        if stats_3m:
-            results_3m.append((ticker, stats_3m))
-
-        progress.progress((i+1)/len(tickers))
-        time.sleep(0.01)
+        if stats:
+            results_month.append((ticker, stats))
 
     # DEBUG
-    st.write("Résultats mois:", len(results_month))
-    st.write("Résultats 2 semaines:", len(results_2w))
-    st.write("Résultats 3 mois:", len(results_3m))
+    st.write("Tickers avec données Polygon:", debug_data_ok)
+    st.write("Résultats valides:", len(results_month))
 
-    # -------- RANKING --------
-    top_m = rank(results_month)
-    top_2w = rank(results_2w)
-    top_3m = rank(results_3m)
+    top = rank(results_month)
 
-    # -------- DISPLAY --------
-    if not top_m.empty:
-        st.subheader("Mois courant")
-        st.dataframe(top_m)
+    if top.empty:
+        st.error("AUCUN RESULTAT → problème logique ou API")
+    else:
+        st.dataframe(top)
 
-    if not top_2w.empty:
-        st.subheader("2 semaines")
-        st.dataframe(top_2w)
+        report = "SAISONNALITÉ TEA\n\n"
 
-    if not top_3m.empty:
-        st.subheader("3 mois")
-        st.dataframe(top_3m)
+        for _, r in top.iterrows():
+            report += f"{r['ticker']} | WR {round(r['winrate'])}% | {round(r['mean'],2)}%\n"
 
-    # -------- DISCORD --------
-    report = "SAISONNALITÉ TEA\n\n"
-
-    def format_block(name, df):
-        if df.empty:
-            return f"{name}: Aucun résultat\n\n"
-        txt = f"{name}:\n"
-        for _, r in df.iterrows():
-            txt += f"{r['ticker']} | WR {round(r['winrate'])}% | {round(r['mean'],2)}%\n"
-        return txt + "\n"
-
-    report += format_block("MOIS", top_m)
-    report += format_block("2 SEMAINES", top_2w)
-    report += format_block("3 MOIS", top_3m)
-
-    if st.button("ENVOYER DISCORD"):
-        send_to_discord(report)
-        st.success("Envoyé dans Discord")
+        if st.button("SEND"):
+            send_to_discord(report)
+            st.success("Envoyé")
