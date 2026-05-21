@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import requests
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 warnings.filterwarnings("ignore")
 
@@ -219,6 +220,95 @@ def rank(data):
     )
 
 # ======================================================
+# PROCESS TICKER
+# ======================================================
+def process_ticker(ticker, today, start_all, end_all):
+
+    close = get_data(
+        ticker,
+        start_all,
+        end_all
+    )
+
+    if close is None or len(close) < 50:
+        return None
+
+    results = {
+        "month": None,
+        "2w": None,
+        "3m": None
+    }
+
+    try:
+
+        current_month = today.month
+
+        # ==============================
+        # MOIS
+        # ==============================
+        start_doy = datetime(
+            today.year,
+            current_month,
+            1
+        ).timetuple().tm_yday
+
+        end_doy = datetime(
+            today.year,
+            current_month,
+            28
+        ).timetuple().tm_yday
+
+        stats_m = seasonality_doy(
+            close,
+            start_doy,
+            end_doy
+        )
+
+        results["month"] = stats_m
+
+        # ==============================
+        # 2 SEMAINES
+        # ==============================
+        start_doy = (
+            today.timetuple().tm_yday
+        )
+
+        end_doy = (
+            today + timedelta(days=14)
+        ).timetuple().tm_yday
+
+        stats_2w = seasonality_doy(
+            close,
+            start_doy,
+            end_doy
+        )
+
+        results["2w"] = stats_2w
+
+        # ==============================
+        # 3 MOIS
+        # ==============================
+        end_3m = (
+            today + timedelta(days=90)
+        ).timetuple().tm_yday
+
+        stats_3m = seasonality_doy(
+            close,
+            start_doy,
+            end_3m
+        )
+
+        results["3m"] = stats_3m
+
+        return ticker, results
+
+    except Exception as e:
+
+        print(f"{ticker} process error: {e}")
+
+        return None
+
+# ======================================================
 # DISCORD
 # ======================================================
 def send_block(title, df):
@@ -269,14 +359,9 @@ if st.button("🚀 RUN ANALYSE"):
 
         st.stop()
 
-    # DEBUG
-    tickers = tickers[:150]
-
     st.success(f"✅ {len(tickers)} tickers chargés")
 
     today = datetime.today()
-
-    current_month = today.month
 
     start_year = today.year - 15
 
@@ -294,111 +379,59 @@ if st.button("🚀 RUN ANALYSE"):
 
     status = st.empty()
 
-    for i, ticker in enumerate(tickers):
+    # ======================================================
+    # MULTITHREAD
+    # ======================================================
+    with ThreadPoolExecutor(max_workers=25) as executor:
 
-        status.text(
-            f"Analyse {ticker} "
-            f"({i + 1}/{len(tickers)})"
-        )
+        futures = {
+            executor.submit(
+                process_ticker,
+                ticker,
+                today,
+                start_all,
+                end_all
+            ): ticker
+            for ticker in tickers
+        }
 
-        close = get_data(
-            ticker,
-            start_all,
-            end_all
-        )
+        total = len(futures)
 
-        if close is None or len(close) < 50:
+        for i, future in enumerate(as_completed(futures)):
 
-            progress.progress(
-                (i + 1) / len(tickers)
+            try:
+
+                result = future.result()
+
+                if result is None:
+                    continue
+
+                ticker, stats = result
+
+                if stats["month"]:
+                    results_month.append(
+                        (ticker, stats["month"])
+                    )
+
+                if stats["2w"]:
+                    results_2w.append(
+                        (ticker, stats["2w"])
+                    )
+
+                if stats["3m"]:
+                    results_3m.append(
+                        (ticker, stats["3m"])
+                    )
+
+            except Exception as e:
+
+                print("Future error:", e)
+
+            progress.progress((i + 1) / total)
+
+            status.text(
+                f"Analyse {i + 1}/{total}"
             )
-
-            continue
-
-        # ======================================================
-        # MOIS
-        # ======================================================
-        try:
-
-            start_doy = datetime(
-                today.year,
-                current_month,
-                1
-            ).timetuple().tm_yday
-
-            end_doy = datetime(
-                today.year,
-                current_month,
-                28
-            ).timetuple().tm_yday
-
-            stats_m = seasonality_doy(
-                close,
-                start_doy,
-                end_doy
-            )
-
-            if stats_m:
-                results_month.append(
-                    (ticker, stats_m)
-                )
-
-        except:
-            pass
-
-        # ======================================================
-        # 2 SEMAINES
-        # ======================================================
-        try:
-
-            start_doy = (
-                today.timetuple().tm_yday
-            )
-
-            end_doy = (
-                today + timedelta(days=14)
-            ).timetuple().tm_yday
-
-            stats_2w = seasonality_doy(
-                close,
-                start_doy,
-                end_doy
-            )
-
-            if stats_2w:
-                results_2w.append(
-                    (ticker, stats_2w)
-                )
-
-        except:
-            pass
-
-        # ======================================================
-        # 3 MOIS
-        # ======================================================
-        try:
-
-            end_3m = (
-                today + timedelta(days=90)
-            ).timetuple().tm_yday
-
-            stats_3m = seasonality_doy(
-                close,
-                start_doy,
-                end_3m
-            )
-
-            if stats_3m:
-                results_3m.append(
-                    (ticker, stats_3m)
-                )
-
-        except:
-            pass
-
-        progress.progress(
-            (i + 1) / len(tickers)
-        )
 
     # ======================================================
     # STORE
@@ -417,6 +450,7 @@ if st.button("🚀 RUN ANALYSE"):
 st.subheader("📅 Mois courant")
 
 if not st.session_state.top_m.empty:
+
     st.dataframe(
         st.session_state.top_m,
         use_container_width=True
@@ -425,6 +459,7 @@ if not st.session_state.top_m.empty:
 st.subheader("📆 2 semaines")
 
 if not st.session_state.top_2w.empty:
+
     st.dataframe(
         st.session_state.top_2w,
         use_container_width=True
@@ -433,6 +468,7 @@ if not st.session_state.top_2w.empty:
 st.subheader("📊 3 mois")
 
 if not st.session_state.top_3m.empty:
+
     st.dataframe(
         st.session_state.top_3m,
         use_container_width=True
