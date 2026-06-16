@@ -16,8 +16,11 @@ if not DISCORD_WEBHOOK_URL:
 
 
 def fetch_sp500():
-    df = pd.read_csv("https://datahub.io/core/s-and-p-500-companies/r/constituents.csv")
-    return df["Symbol"].str.replace(".", "-", regex=False).tolist()
+    df = pd.read_excel("sp500_constituents.xlsx")
+
+    print(df.columns)  # temporaire pour vérifier le nom des colonnes
+
+    return df["Symbol"].tolist()
 
 
 def get_data(ticker, start, end):
