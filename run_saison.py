@@ -118,7 +118,7 @@ def send(title, df):
 print("🚀 Début du script")
 
 today = datetime.today()
-tickers = fetch_sp500()[:100]  # 🔥 réduit pour fiabilité
+tickers = fetch_sp500()  
 
 start_year = today.year - 15
 start_all = f"{start_year}-01-01"
