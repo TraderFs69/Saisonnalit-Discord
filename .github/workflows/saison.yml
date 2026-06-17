@@ -2,7 +2,7 @@ name: Saison TEA
 
 on:
   schedule:
-    - cron: '0 23 * * *'  # ~20h Québec
+    - cron: '0 23 * * *'
   workflow_dispatch:
 
 jobs:
@@ -17,8 +17,14 @@ jobs:
         with:
           python-version: '3.11'
 
-     - name: Install dependencies
-  run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run script
+        env:
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python run_saison.py
 
       - name: Run script
         env:
